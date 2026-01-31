@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
+import { TopicStatus } from '@prisma/client';
 
 @Injectable()
 export class TopicsService {
@@ -9,29 +10,37 @@ export class TopicsService {
     private redis: RedisService,
   ) {}
 
-  async list() {
+  async list(category?: string) {
     // Try cache first
-    const cached = await this.redis.get('topics:all');
+    const cacheKey = category ? `topics:${category}` : 'topics:all';
+    const cached = await this.redis.get(cacheKey);
     if (cached) return cached;
 
+    const where: any = { status: TopicStatus.OPEN };
+    if (category) where.category = category;
+
     const topics = await this.prisma.topic.findMany({
-      orderBy: { name: 'asc' },
+      where,
+      orderBy: { upvotes: 'desc' },
       include: {
         _count: { select: { scenes: true } },
+        createdBy: { select: { id: true, username: true, avatarUrl: true } },
       },
     });
 
     const result = topics.map((t) => ({
       id: t.id,
-      name: t.name,
-      slug: t.slug,
+      title: t.title,
       description: t.description,
-      iconUrl: t.iconUrl,
+      category: t.category,
+      upvotes: t.upvotes,
       sceneCount: t._count.scenes,
+      createdBy: t.createdBy,
+      createdAt: t.createdAt,
     }));
 
     // Cache for 5 minutes
-    await this.redis.set('topics:all', result, 300);
+    await this.redis.set(cacheKey, result, 300);
 
     return { items: result };
   }
@@ -41,7 +50,7 @@ export class TopicsService {
       where: { id },
       include: {
         _count: { select: { scenes: true } },
-        categories: { orderBy: { name: 'asc' } },
+        createdBy: { select: { id: true, username: true, avatarUrl: true } },
       },
     });
 
@@ -51,29 +60,27 @@ export class TopicsService {
 
     return {
       id: topic.id,
-      name: topic.name,
-      slug: topic.slug,
+      title: topic.title,
       description: topic.description,
-      iconUrl: topic.iconUrl,
+      category: topic.category,
+      upvotes: topic.upvotes,
       sceneCount: topic._count.scenes,
-      categories: topic.categories,
+      createdBy: topic.createdBy,
+      createdAt: topic.createdAt,
     };
   }
 
-  async getCategories(topicId: string) {
-    const categories = await this.prisma.category.findMany({
-      where: { topicId },
-      orderBy: { name: 'asc' },
-      include: {
-        _count: { select: { scenes: true } },
-      },
+  async getCategories() {
+    // Get distinct categories from topics
+    const topics = await this.prisma.topic.groupBy({
+      by: ['category'],
+      _count: { category: true },
     });
 
     return {
-      items: categories.map((c) => ({
-        id: c.id,
-        name: c.name,
-        sceneCount: c._count.scenes,
+      items: topics.map((t) => ({
+        name: t.category,
+        topicCount: t._count.category,
       })),
     };
   }

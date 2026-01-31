@@ -15,14 +15,10 @@ export class CreateSceneDto {
   @MaxLength(2000)
   description: string;
 
-  @ApiProperty()
-  @IsUUID()
-  topicId: string;
-
   @ApiPropertyOptional()
   @IsUUID()
   @IsOptional()
-  categoryId?: string;
+  topicId?: string;
 
   @ApiProperty({ example: 'A group of explorers discover a hidden entrance to a lost city' })
   @IsString()
