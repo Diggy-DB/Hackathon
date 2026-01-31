@@ -1,4 +1,11 @@
-node_modules
+# Ignore node modules and build files
+node_modules/
+**/node_modules/
+.next/
+.env
+.DS_Store
+/dist/
 services/generator/.env
 __pycache__/
 *.pyc
+
