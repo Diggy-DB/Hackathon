@@ -348,7 +348,7 @@ LOG_LEVEL=debug
 
 ## 🗺️ Roadmap
 
-### MVP (Weeks 1-4)
+### MVP
 - Core auth and user management
 - Topic/category/idea CRUD
 - Scene creation and continuation
@@ -357,7 +357,7 @@ LOG_LEVEL=debug
 - Basic continuity validation
 - Segment storage and playback
 
-### V1 (Weeks 5-8)
+### V1
 - HLS streaming with CDN
 - Database partitioning
 - Read replicas
@@ -366,7 +366,7 @@ LOG_LEVEL=debug
 - Moderation system
 - Rate limiting and abuse prevention
 
-### V2 (Weeks 9-12)
+### V2
 - Scene forking and rebasing
 - Recommendation engine
 - Full-text search (OpenSearch)
