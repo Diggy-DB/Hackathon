@@ -1,2 +1,4 @@
 node_modules
 services/generator/.env
+__pycache__/
+*.pyc
