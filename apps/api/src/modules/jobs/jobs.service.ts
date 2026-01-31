@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
+import { JobStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class JobsService {
@@ -19,6 +20,9 @@ export class JobsService {
 
     const job = await this.prisma.job.findUnique({
       where: { id },
+      include: {
+        segment: { select: { id: true, sceneId: true } },
+      },
     });
 
     if (!job) {
@@ -35,10 +39,14 @@ export class JobsService {
       createdAt: job.createdAt,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
+      segment: job.segment,
     };
 
     // Cache active jobs for 30 seconds
-    if (['pending', 'queued', 'processing'].includes(job.status)) {
+    const isActive = job.status === JobStatus.PENDING || 
+                     job.status === JobStatus.QUEUED || 
+                     job.status === JobStatus.PROCESSING;
+    if (isActive) {
       await this.redis.set(`job:${id}`, status, 30);
     }
 
@@ -51,8 +59,8 @@ export class JobsService {
       data: {
         progress,
         stage,
-        status: 'processing',
-        startedAt: { set: new Date() },
+        status: JobStatus.PROCESSING,
+        startedAt: new Date(),
       },
     });
 
@@ -61,7 +69,7 @@ export class JobsService {
       jobId: id,
       progress,
       stage,
-      status: 'processing',
+      status: JobStatus.PROCESSING,
     });
 
     // Update cache
@@ -70,11 +78,11 @@ export class JobsService {
     return job;
   }
 
-  async complete(id: string, result: Record<string, unknown>) {
+  async complete(id: string, result: Prisma.InputJsonValue) {
     const job = await this.prisma.job.update({
       where: { id },
       data: {
-        status: 'completed',
+        status: JobStatus.COMPLETED,
         progress: 100,
         result,
         completedAt: new Date(),
@@ -98,7 +106,7 @@ export class JobsService {
     const job = await this.prisma.job.update({
       where: { id },
       data: {
-        status: 'failed',
+        status: JobStatus.FAILED,
         error,
         completedAt: new Date(),
         attempts: { increment: 1 },
@@ -121,13 +129,14 @@ export class JobsService {
   async retry(id: string) {
     const job = await this.prisma.job.findUnique({
       where: { id },
+      include: { segment: true },
     });
 
     if (!job) {
       throw new NotFoundException('Job not found');
     }
 
-    if (job.status !== 'failed') {
+    if (job.status !== JobStatus.FAILED) {
       throw new BadRequestException('Only failed jobs can be retried');
     }
 
@@ -139,7 +148,7 @@ export class JobsService {
     await this.prisma.job.update({
       where: { id },
       data: {
-        status: 'pending',
+        status: JobStatus.PENDING,
         progress: 0,
         stage: null,
         error: null,
@@ -151,7 +160,8 @@ export class JobsService {
     // Re-queue
     await this.generationQueue.add('generate', {
       jobId: job.id,
-      ...(job.payload as object),
+      segmentId: job.segmentId,
+      sceneId: job.segment?.sceneId,
     });
 
     return { success: true };
@@ -166,14 +176,15 @@ export class JobsService {
       throw new NotFoundException('Job not found');
     }
 
-    if (!['pending', 'queued'].includes(job.status)) {
+    const isCancelable = job.status === JobStatus.PENDING || job.status === JobStatus.QUEUED;
+    if (!isCancelable) {
       throw new BadRequestException('Only pending jobs can be cancelled');
     }
 
     await this.prisma.job.update({
       where: { id },
       data: {
-        status: 'cancelled',
+        status: JobStatus.CANCELLED,
         completedAt: new Date(),
       },
     });

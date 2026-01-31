@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SegmentStatus } from '@prisma/client';
 
 @Injectable()
 export class SegmentsService {
@@ -9,7 +10,7 @@ export class SegmentsService {
     const segment = await this.prisma.segment.findUnique({
       where: { id },
       include: {
-        user: { select: { id: true, username: true, avatarUrl: true } },
+        createdBy: { select: { id: true, username: true, avatarUrl: true } },
         scene: { select: { id: true, title: true } },
       },
     });
@@ -24,16 +25,16 @@ export class SegmentsService {
   async getForScene(sceneId: string) {
     return this.prisma.segment.findMany({
       where: { sceneId },
-      orderBy: { sequence: 'asc' },
+      orderBy: { orderIndex: 'asc' },
       include: {
-        user: { select: { id: true, username: true, avatarUrl: true } },
+        createdBy: { select: { id: true, username: true, avatarUrl: true } },
       },
     });
   }
 
   async updateStatus(
     id: string,
-    status: string,
+    status: SegmentStatus,
     data?: { videoUrl?: string; hlsUrl?: string; thumbnailUrl?: string; duration?: number },
   ) {
     return this.prisma.segment.update({
@@ -41,6 +42,7 @@ export class SegmentsService {
       data: {
         status,
         ...data,
+        ...(status === SegmentStatus.COMPLETED ? { completedAt: new Date() } : {}),
       },
     });
   }

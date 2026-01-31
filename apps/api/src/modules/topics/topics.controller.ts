@@ -1,5 +1,5 @@
-import { Controller, Get, Param, ParseUUIDPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Param, Query, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { TopicsService } from './topics.service';
 
 @ApiTags('topics')
@@ -9,19 +9,20 @@ export class TopicsController {
 
   @Get()
   @ApiOperation({ summary: 'List all topics' })
-  async list() {
-    return this.topicsService.list();
+  @ApiQuery({ name: 'category', required: false })
+  async list(@Query('category') category?: string) {
+    return this.topicsService.list(category);
+  }
+
+  @Get('categories')
+  @ApiOperation({ summary: 'Get all topic categories' })
+  async getCategories() {
+    return this.topicsService.getCategories();
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get topic by ID' })
   async getById(@Param('id', ParseUUIDPipe) id: string) {
     return this.topicsService.findById(id);
-  }
-
-  @Get(':id/categories')
-  @ApiOperation({ summary: 'Get categories for a topic' })
-  async getCategories(@Param('id', ParseUUIDPipe) id: string) {
-    return this.topicsService.getCategories(id);
   }
 }

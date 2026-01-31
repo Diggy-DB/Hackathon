@@ -62,6 +62,15 @@ export interface User extends BaseEntity {
   lastLoginAt?: Date;
 }
 
+export interface JwtPayload {
+  sub: string;
+  email: string;
+  role: UserRole;
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
 export interface Topic extends BaseEntity {
   name: string;
   slug: string;

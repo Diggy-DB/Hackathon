@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 import { LoginDto, SignupDto } from './dto';
+import { UserRole } from '@prisma/client';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -41,7 +42,7 @@ export class AuthService {
         email: dto.email,
         username: dto.username,
         passwordHash,
-        role: 'user',
+        role: UserRole.USER,
       },
     });
 
@@ -120,7 +121,7 @@ export class AuthService {
     return user;
   }
 
-  private async generateTokens(user: { id: string; email: string; role: string }) {
+  private async generateTokens(user: { id: string; email: string; role: UserRole }) {
     const jti = crypto.randomUUID();
 
     const accessToken = this.jwt.sign(
