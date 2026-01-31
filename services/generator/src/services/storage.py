@@ -121,6 +121,46 @@ class StorageService:
             ExpiresIn=expiration,
         )
 
+    def upload_file(self, local_path: str | Path, s3_key: str) -> str:
+        """
+        Upload a file to S3 and return the CDN URL.
+        
+        Args:
+            local_path: Path to local file
+            s3_key: S3 key (path) for the file
+            
+        Returns:
+            CDN URL for the uploaded file
+        """
+        local_path = Path(local_path)
+        
+        # Determine content type
+        suffix = local_path.suffix.lower()
+        content_types = {
+            ".mp4": "video/mp4",
+            ".webm": "video/webm",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".m3u8": "application/vnd.apple.mpegurl",
+            ".ts": "video/mp2t",
+        }
+        content_type = content_types.get(suffix, "application/octet-stream")
+        
+        logger.info("Uploading file", path=str(local_path), key=s3_key)
+        
+        self.s3.upload_file(
+            str(local_path),
+            self.bucket,
+            s3_key,
+            ExtraArgs={
+                "ContentType": content_type,
+                "CacheControl": "max-age=31536000",
+            },
+        )
+        
+        return f"{self.cdn_url}/{s3_key}"
+
     def delete_segment(self, segment_id: str, scene_id: str) -> None:
         """Delete all files for a segment."""
         prefix = f"scenes/{scene_id}/segments/{segment_id}/"

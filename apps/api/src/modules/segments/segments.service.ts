@@ -1,10 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
-import { SegmentStatus } from '@prisma/client';
+import { SegmentStatus, JobType, JobStatus } from '@prisma/client';
+import { SubmitSegmentDto, GenerateVideoDto } from './dto';
 
 @Injectable()
 export class SegmentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @InjectQueue('generation') private generationQueue: Queue,
+  ) {}
 
   async findById(id: string) {
     const segment = await this.prisma.segment.findUnique({
@@ -28,6 +34,212 @@ export class SegmentsService {
       orderBy: { orderIndex: 'asc' },
       include: {
         createdBy: { select: { id: true, username: true, avatarUrl: true } },
+      },
+    });
+  }
+
+  /**
+   * Submit a new segment prompt for a scene.
+   * Creates the segment and optionally starts video generation.
+   */
+  async submitSegment(dto: SubmitSegmentDto, userId: string) {
+    // Verify scene exists
+    const scene = await this.prisma.scene.findUnique({
+      where: { id: dto.sceneId },
+      include: {
+        segments: { orderBy: { orderIndex: 'desc' }, take: 1 },
+      },
+    });
+
+    if (!scene) {
+      throw new NotFoundException('Scene not found');
+    }
+
+    // Determine order index
+    let orderIndex = dto.orderIndex;
+    if (!orderIndex) {
+      const lastSegment = scene.segments[0];
+      orderIndex = lastSegment ? lastSegment.orderIndex + 1 : 1;
+    }
+
+    // Check for duplicate order index
+    const existing = await this.prisma.segment.findUnique({
+      where: {
+        sceneId_orderIndex: {
+          sceneId: dto.sceneId,
+          orderIndex,
+        },
+      },
+    });
+
+    if (existing) {
+      throw new BadRequestException(
+        `Segment with order index ${orderIndex} already exists in this scene`,
+      );
+    }
+
+    // Create the segment
+    const segment = await this.prisma.segment.create({
+      data: {
+        sceneId: dto.sceneId,
+        prompt: dto.prompt,
+        orderIndex,
+        status: SegmentStatus.PENDING,
+        createdById: userId,
+      },
+      include: {
+        createdBy: { select: { id: true, username: true, avatarUrl: true } },
+        scene: { select: { id: true, title: true } },
+      },
+    });
+
+    // Update scene segment count
+    await this.prisma.scene.update({
+      where: { id: dto.sceneId },
+      data: { segmentCount: { increment: 1 } },
+    });
+
+    return segment;
+  }
+
+  /**
+   * Start video generation for a segment.
+   * Creates a job and queues it for processing.
+   */
+  async generateVideo(dto: GenerateVideoDto, userId: string) {
+    const segment = await this.prisma.segment.findUnique({
+      where: { id: dto.segmentId },
+      include: { scene: true },
+    });
+
+    if (!segment) {
+      throw new NotFoundException('Segment not found');
+    }
+
+    // Check if already generating
+    if (segment.status === SegmentStatus.PROCESSING || segment.status === SegmentStatus.QUEUED) {
+      throw new BadRequestException('Video generation already in progress');
+    }
+
+    // Create a job record
+    const job = await this.prisma.job.create({
+      data: {
+        type: JobType.GENERATE_SEGMENT,
+        status: JobStatus.PENDING,
+        segmentId: dto.segmentId,
+      },
+    });
+
+    // Update segment status to QUEUED (will become PROCESSING when worker picks it up)
+    await this.prisma.segment.update({
+      where: { id: dto.segmentId },
+      data: { status: SegmentStatus.QUEUED },
+    });
+
+    // Queue the job for the Python worker
+    await this.generationQueue.add(
+      'generate-segment',
+      {
+        jobId: job.id,
+        sceneId: segment.sceneId,
+        segmentId: dto.segmentId,
+        aspectRatio: dto.aspectRatio || '16:9',
+        durationSeconds: dto.durationSeconds || 8,
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 30000,
+        },
+        removeOnComplete: 100,
+        removeOnFail: 50,
+      },
+    );
+
+    return {
+      jobId: job.id,
+      segmentId: dto.segmentId,
+      status: 'queued',
+      message: 'Video generation queued successfully',
+    };
+  }
+
+  /**
+   * Submit a segment AND start video generation immediately.
+   * Combines submitSegment and generateVideo.
+   */
+  async submitAndGenerate(dto: SubmitSegmentDto, userId: string) {
+    // Create segment
+    const segment = await this.submitSegment(dto, userId);
+
+    // Start generation
+    const jobResult = await this.generateVideo(
+      { segmentId: segment.id },
+      userId,
+    );
+
+    return {
+      segment,
+      job: jobResult,
+    };
+  }
+
+  /**
+   * Get the status of a video generation job.
+   */
+  async getJobStatus(jobId: string) {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        segment: {
+          select: {
+            id: true,
+            status: true,
+            videoUrl: true,
+            hlsUrl: true,
+            thumbnailUrl: true,
+            duration: true,
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    return {
+      jobId: job.id,
+      type: job.type,
+      status: job.status,
+      progress: job.progress,
+      stage: job.stage,
+      error: job.error,
+      segment: job.segment,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    };
+  }
+
+  /**
+   * Get previous segments in a scene (for context).
+   */
+  async getPreviousSegments(sceneId: string, beforeOrderIndex: number) {
+    return this.prisma.segment.findMany({
+      where: {
+        sceneId,
+        orderIndex: { lt: beforeOrderIndex },
+      },
+      orderBy: { orderIndex: 'asc' },
+      select: {
+        id: true,
+        orderIndex: true,
+        prompt: true,
+        expandedScript: true,
+        videoUrl: true,
+        status: true,
       },
     });
   }

@@ -8,15 +8,22 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SegmentsService = void 0;
 const common_1 = require("@nestjs/common");
+const bullmq_1 = require("@nestjs/bullmq");
+const bullmq_2 = require("bullmq");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const client_1 = require("@prisma/client");
 let SegmentsService = class SegmentsService {
     prisma;
-    constructor(prisma) {
+    generationQueue;
+    constructor(prisma, generationQueue) {
         this.prisma = prisma;
+        this.generationQueue = generationQueue;
     }
     async findById(id) {
         const segment = await this.prisma.segment.findUnique({
@@ -40,6 +47,152 @@ let SegmentsService = class SegmentsService {
             },
         });
     }
+    async submitSegment(dto, userId) {
+        const scene = await this.prisma.scene.findUnique({
+            where: { id: dto.sceneId },
+            include: {
+                segments: { orderBy: { orderIndex: 'desc' }, take: 1 },
+            },
+        });
+        if (!scene) {
+            throw new common_1.NotFoundException('Scene not found');
+        }
+        let orderIndex = dto.orderIndex;
+        if (!orderIndex) {
+            const lastSegment = scene.segments[0];
+            orderIndex = lastSegment ? lastSegment.orderIndex + 1 : 1;
+        }
+        const existing = await this.prisma.segment.findUnique({
+            where: {
+                sceneId_orderIndex: {
+                    sceneId: dto.sceneId,
+                    orderIndex,
+                },
+            },
+        });
+        if (existing) {
+            throw new common_1.BadRequestException(`Segment with order index ${orderIndex} already exists in this scene`);
+        }
+        const segment = await this.prisma.segment.create({
+            data: {
+                sceneId: dto.sceneId,
+                prompt: dto.prompt,
+                orderIndex,
+                status: client_1.SegmentStatus.PENDING,
+                createdById: userId,
+            },
+            include: {
+                createdBy: { select: { id: true, username: true, avatarUrl: true } },
+                scene: { select: { id: true, title: true } },
+            },
+        });
+        await this.prisma.scene.update({
+            where: { id: dto.sceneId },
+            data: { segmentCount: { increment: 1 } },
+        });
+        return segment;
+    }
+    async generateVideo(dto, userId) {
+        const segment = await this.prisma.segment.findUnique({
+            where: { id: dto.segmentId },
+            include: { scene: true },
+        });
+        if (!segment) {
+            throw new common_1.NotFoundException('Segment not found');
+        }
+        if (segment.status === client_1.SegmentStatus.PROCESSING || segment.status === client_1.SegmentStatus.QUEUED) {
+            throw new common_1.BadRequestException('Video generation already in progress');
+        }
+        const job = await this.prisma.job.create({
+            data: {
+                type: client_1.JobType.GENERATE_SEGMENT,
+                status: client_1.JobStatus.PENDING,
+                segmentId: dto.segmentId,
+            },
+        });
+        await this.prisma.segment.update({
+            where: { id: dto.segmentId },
+            data: { status: client_1.SegmentStatus.QUEUED },
+        });
+        await this.generationQueue.add('generate-segment', {
+            jobId: job.id,
+            sceneId: segment.sceneId,
+            segmentId: dto.segmentId,
+            aspectRatio: dto.aspectRatio || '16:9',
+            durationSeconds: dto.durationSeconds || 8,
+        }, {
+            attempts: 3,
+            backoff: {
+                type: 'exponential',
+                delay: 30000,
+            },
+            removeOnComplete: 100,
+            removeOnFail: 50,
+        });
+        return {
+            jobId: job.id,
+            segmentId: dto.segmentId,
+            status: 'queued',
+            message: 'Video generation queued successfully',
+        };
+    }
+    async submitAndGenerate(dto, userId) {
+        const segment = await this.submitSegment(dto, userId);
+        const jobResult = await this.generateVideo({ segmentId: segment.id }, userId);
+        return {
+            segment,
+            job: jobResult,
+        };
+    }
+    async getJobStatus(jobId) {
+        const job = await this.prisma.job.findUnique({
+            where: { id: jobId },
+            include: {
+                segment: {
+                    select: {
+                        id: true,
+                        status: true,
+                        videoUrl: true,
+                        hlsUrl: true,
+                        thumbnailUrl: true,
+                        duration: true,
+                    },
+                },
+            },
+        });
+        if (!job) {
+            throw new common_1.NotFoundException('Job not found');
+        }
+        return {
+            jobId: job.id,
+            type: job.type,
+            status: job.status,
+            progress: job.progress,
+            stage: job.stage,
+            error: job.error,
+            segment: job.segment,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            completedAt: job.completedAt,
+        };
+    }
+    async getPreviousSegments(sceneId, beforeOrderIndex) {
+        return this.prisma.segment.findMany({
+            where: {
+                sceneId,
+                orderIndex: { lt: beforeOrderIndex },
+            },
+            orderBy: { orderIndex: 'asc' },
+            select: {
+                id: true,
+                orderIndex: true,
+                prompt: true,
+                expandedScript: true,
+                videoUrl: true,
+                status: true,
+            },
+        });
+    }
     async updateStatus(id, status, data) {
         return this.prisma.segment.update({
             where: { id },
@@ -54,6 +207,8 @@ let SegmentsService = class SegmentsService {
 exports.SegmentsService = SegmentsService;
 exports.SegmentsService = SegmentsService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __param(1, (0, bullmq_1.InjectQueue)('generation')),
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        bullmq_2.Queue])
 ], SegmentsService);
 //# sourceMappingURL=segments.service.js.map

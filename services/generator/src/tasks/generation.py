@@ -1,5 +1,12 @@
 """
 Video generation task - main entry point for segment generation.
+
+This task orchestrates the full video generation pipeline:
+1. Fetches segment and scene context from database
+2. Uses OpenAI ChatGPT to expand user prompts into detailed scripts
+3. Uses Google Veo 3 to generate video from the expanded script
+4. Processes video to HLS format
+5. Uploads to S3 storage
 """
 
 from celery import shared_task
@@ -9,7 +16,7 @@ import structlog
 from src.config import get_settings
 from src.services.database import DatabaseService
 from src.services.storage import StorageService
-from src.services.script_expander import ScriptExpander
+from src.services.script_expander import ScriptExpander, PreviousSegment
 from src.services.continuity import ContinuityValidator
 from src.services.video_generator import VideoGenerator
 from src.services.hls_builder import HLSBuilder
@@ -36,9 +43,9 @@ def generate_segment(
     Main task for generating a video segment.
     
     Pipeline stages:
-    1. Script Expansion - Expand user prompt into detailed script
+    1. Script Expansion - Expand user prompt into detailed script via OpenAI
     2. Continuity Validation - Check against Scene Bible
-    3. Video Generation - Generate video using AI provider
+    3. Video Generation - Generate video using Google Veo 3
     4. HLS Processing - Transcode to HLS format
     5. Upload - Upload to S3
     6. Finalization - Update database, notify client
@@ -58,53 +65,95 @@ def generate_segment(
         if not all([job, segment, scene]):
             raise ValueError("Missing job, segment, or scene data")
 
-        # Stage 1: Script Expansion
-        log.info("Stage 1: Script expansion")
+        # Get scene bible for continuity
+        scene_bible = db.get_scene_bible(scene_id)
+        
+        # Get previous segments for context
+        previous_segments = db.get_segments_before(scene_id, segment["order_index"])
+        prev_segment_objs = [
+            PreviousSegment(
+                order_index=s["order_index"],
+                prompt=s.get("prompt", ""),
+                expanded_script=s.get("expanded_script"),
+                video_url=s.get("video_url"),
+            )
+            for s in previous_segments
+        ]
+
+        # Build scene context
+        scene_context = {
+            "title": scene.get("title", ""),
+            "description": scene.get("description", ""),
+            "topic": scene.get("topic", {}).get("title", "") if scene.get("topic") else "",
+        }
+
+        # Stage 1: Script Expansion via OpenAI ChatGPT
+        log.info("Stage 1: Script expansion via OpenAI")
         update_progress(db, job_id, 10, "script_expanding")
 
         expander = ScriptExpander()
-        expanded_script = expander.expand(
-            prompt=segment["prompt"],
-            scene_context=scene.get("description", ""),
-            scene_bible=db.get_scene_bible(scene_id),
+        expanded = expander.expand(
+            user_prompt=segment["prompt"],
+            scene_context=scene_context,
+            scene_bible=scene_bible,
+            previous_segments=prev_segment_objs,
         )
 
-        db.update_segment(segment_id, {"expanded_script": expanded_script})
+        # Save expanded script and video prompt
+        db.update_segment(segment_id, {
+            "expanded_script": expanded.full_script,
+        })
         update_progress(db, job_id, 25, "script_expanded")
+        
+        log.info(
+            "Script expanded",
+            duration_estimate=expanded.duration_estimate,
+            has_video_prompt=bool(expanded.video_prompt),
+        )
 
         # Stage 2: Continuity Validation
         log.info("Stage 2: Continuity validation")
         update_progress(db, job_id, 30, "continuity_checking")
 
         validator = ContinuityValidator()
-        bible = db.get_scene_bible(scene_id)
-        validation_result = validator.validate(expanded_script, bible)
+        validation_result = validator.validate(expanded.full_script, scene_bible)
 
         if not validation_result.is_valid:
             log.warning("Continuity violations found", violations=validation_result.violations)
             
             # Apply auto-corrections if possible
             if validation_result.auto_corrections:
-                expanded_script = validator.apply_corrections(
-                    expanded_script,
+                corrected_script = validator.apply_corrections(
+                    expanded.full_script,
                     validation_result.auto_corrections,
                 )
-                db.update_segment(segment_id, {"expanded_script": expanded_script})
+                db.update_segment(segment_id, {"expanded_script": corrected_script})
+                # Update video prompt too
+                expanded = expanded.__class__(
+                    **{**expanded.__dict__, "full_script": corrected_script}
+                )
 
         update_progress(db, job_id, 40, "continuity_checked")
 
-        # Stage 3: Video Generation
-        log.info("Stage 3: Video generation")
+        # Stage 3: Video Generation via Google Veo 3
+        log.info("Stage 3: Video generation via Google Veo 3")
         update_progress(db, job_id, 45, "generating_video")
 
         generator = VideoGenerator()
         video_result = generator.generate(
-            script=expanded_script,
-            scene_bible=bible,
-            reference_frames=get_reference_frames(db, scene_id),
+            video_prompt=expanded.video_prompt or expanded.full_script[:500],
+            scene_bible=scene_bible,
+            aspect_ratio="16:9",
+            duration_seconds=int(expanded.duration_estimate) or 8,
         )
 
         update_progress(db, job_id, 70, "video_generated")
+        
+        log.info(
+            "Video generated",
+            duration=video_result.duration,
+            model=video_result.model_used,
+        )
 
         # Stage 4: HLS Processing
         log.info("Stage 4: HLS processing")

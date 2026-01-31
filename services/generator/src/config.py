@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -24,7 +25,12 @@ class Settings(BaseSettings):
 
     # AI Providers
     openai_api_key: str = ""
-    runway_api_key: str = ""
+    openai_model: str = "gpt-4-turbo-preview"
+    
+    # Google AI Studio (Veo 3)
+    google_ai_api_key: str = ""
+    google_ai_model: str = "veo-3"
+    google_ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
     # Worker
     worker_concurrency: int = 4
@@ -32,7 +38,7 @@ class Settings(BaseSettings):
     retry_delay: int = 60
 
     class Config:
-        env_file = ".env"
+        env_file = str(Path(__file__).parent.parent / ".env")
         env_file_encoding = "utf-8"
 
 

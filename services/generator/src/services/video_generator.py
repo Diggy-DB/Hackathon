@@ -1,12 +1,20 @@
 """
-Video Generator - Generates video from scripts using AI providers.
+Video Generator - Generates video using Google AI Studio Veo 3 API.
+
+This service takes expanded scripts and generates video content
+using Google's Veo 3 video generation model via the GenAI SDK.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 import tempfile
-import httpx
+import time
+import subprocess
 import structlog
+
+from google import genai
+from google.genai import types
 
 from src.config import get_settings
 
@@ -17,159 +25,219 @@ settings = get_settings()
 @dataclass
 class VideoResult:
     """Result of video generation."""
-    local_path: Path
-    thumbnail_path: Path
+    video_path: Path  # Path to downloaded video file
+    thumbnail_path: Path | None
     duration: float
     width: int
     height: int
+    generation_id: str
+    model_used: str
+
+
+class VideoGenerationError(Exception):
+    """Error during video generation."""
+    pass
 
 
 class VideoGenerator:
-    """Generates video using AI video generation APIs."""
+    """
+    Generates video using Google AI Studio Veo 3 API.
+    
+    Uses the official google-genai SDK for video generation.
+    """
 
     def __init__(self):
-        self.api_key = settings.runway_api_key
-        self.base_url = "https://api.runwayml.com/v1"
+        self.client = genai.Client(api_key=settings.google_ai_api_key)
+        self.model = "veo-3.1-generate-preview"  # Use Veo 3.1 model
 
     def generate(
         self,
-        script: str,
-        scene_bible: dict | None = None,
-        reference_frames: list[str] | None = None,
+        video_prompt: str,
+        scene_bible: dict[str, Any] | None = None,
+        aspect_ratio: str = "16:9",
+        duration_seconds: int = 8,
+        style_preset: str | None = None,
     ) -> VideoResult:
         """
-        Generate video from script.
+        Generate video from a prompt using Veo 3.
         
         Args:
-            script: The expanded script
-            scene_bible: Scene Bible for character consistency
-            reference_frames: URLs of reference frames for consistency
+            video_prompt: The optimized prompt for video generation
+            scene_bible: Scene Bible for style consistency
+            aspect_ratio: Video aspect ratio ("16:9" or "9:16")
+            duration_seconds: Target video duration (4, 6, or 8 seconds)
+            style_preset: Optional style preset
             
         Returns:
-            VideoResult with local file paths
+            VideoResult with local file paths and metadata
         """
-        logger.info("Starting video generation", script_length=len(script))
-
-        # Build prompt for video generation
-        video_prompt = self._build_video_prompt(script, scene_bible)
-
-        # Generate video via API
-        video_url = self._call_generation_api(video_prompt, reference_frames)
-
-        # Download video to local temp file
-        local_path = self._download_video(video_url)
-
-        # Generate thumbnail
-        thumbnail_path = self._generate_thumbnail(local_path)
-
-        # Get video metadata
-        duration = self._get_video_duration(local_path)
-
-        return VideoResult(
-            local_path=local_path,
-            thumbnail_path=thumbnail_path,
-            duration=duration,
-            width=1920,
-            height=1080,
+        logger.info(
+            "Starting video generation",
+            prompt_length=len(video_prompt),
+            aspect_ratio=aspect_ratio,
+            duration=duration_seconds,
         )
 
-    def _build_video_prompt(self, script: str, scene_bible: dict | None) -> str:
-        """Build prompt optimized for video generation."""
-        # Extract the most visual parts of the script
-        # Focus on action and visual descriptions
+        # Enhance prompt with style
+        enhanced_prompt = self._enhance_prompt(video_prompt, scene_bible, style_preset)
         
-        prompt = script
+        # Validate duration (Veo supports 4, 6, or 8 seconds)
+        if duration_seconds not in [4, 6, 8]:
+            duration_seconds = 8
+        
+        try:
+            # Start video generation
+            logger.info("Calling Veo 3.1 API", model=self.model)
+            
+            operation = self.client.models.generate_videos(
+                model=self.model,
+                prompt=enhanced_prompt,
+                config=types.GenerateVideosConfig(
+                    aspect_ratio=aspect_ratio,
+                ),
+            )
+            
+            # Poll for completion
+            logger.info("Waiting for video generation", operation_name=operation.name)
+            while not operation.done:
+                time.sleep(10)
+                operation = self.client.operations.get(operation)
+                logger.info("Still generating...", done=operation.done)
+            
+            # Get the generated video
+            generated_video = operation.response.generated_videos[0]
+            
+            # Download the video
+            self.client.files.download(file=generated_video.video)
+            
+            # Save to temp file
+            temp_dir = Path(tempfile.mkdtemp())
+            video_path = temp_dir / f"video_{int(time.time() * 1000)}.mp4"
+            generated_video.video.save(str(video_path))
+            
+            logger.info("Video downloaded", path=str(video_path))
+            
+            # Generate thumbnail
+            thumbnail_path = self._generate_thumbnail(video_path)
+            
+            # Get duration
+            duration = self._get_video_duration(video_path)
+            
+            return VideoResult(
+                video_path=video_path,
+                thumbnail_path=thumbnail_path,
+                duration=duration,
+                width=1920 if aspect_ratio == "16:9" else 1080,
+                height=1080 if aspect_ratio == "16:9" else 1920,
+                generation_id=operation.name,
+                model_used=self.model,
+            )
+            
+        except Exception as e:
+            logger.error("Video generation failed", error=str(e))
+            raise VideoGenerationError(f"Veo 3 API error: {str(e)}")
 
-        # Add character descriptions if available
-        if scene_bible:
-            chars = scene_bible.get("characters", {})
-            if chars:
-                char_descs = []
-                for char in list(chars.values())[:3]:  # Limit to 3 characters
-                    name = char.get("name", "")
-                    physical = char.get("physicalDescription", {})
-                    desc = f"{name}: {physical.get('build', '')} {physical.get('hairColor', '')} hair"
-                    char_descs.append(desc)
-                
-                prompt = f"Characters: {', '.join(char_descs)}\n\n{prompt}"
-
-        return prompt[:1000]  # Limit prompt length
-
-    def _call_generation_api(
+    def _enhance_prompt(
         self,
         prompt: str,
-        reference_frames: list[str] | None = None,
+        scene_bible: dict[str, Any] | None,
+        style_preset: str | None,
     ) -> str:
-        """Call the video generation API."""
-        logger.info("Calling video generation API")
-
-        # This is a placeholder - actual implementation depends on provider
-        # Example using Runway Gen-3 API structure
+        """Enhance the prompt with style and quality modifiers."""
+        enhancements = []
         
-        payload = {
-            "prompt": prompt,
-            "model": "gen3a_turbo",
-            "duration": 10,  # 10 seconds
-            "ratio": "16:9",
-        }
-
-        if reference_frames:
-            payload["image"] = reference_frames[0]  # Use first frame as reference
-
-        # In production, this would call the actual API
-        # For now, return a placeholder
+        # Add style from scene bible
+        if scene_bible:
+            rules = scene_bible.get("rules", {})
+            if isinstance(rules, dict):
+                if rules.get("visualStyle"):
+                    enhancements.append(rules["visualStyle"])
+                if rules.get("mood"):
+                    enhancements.append(f"Mood: {rules['mood']}")
         
-        # Simulate API call with httpx
-        # response = httpx.post(
-        #     f"{self.base_url}/generate",
-        #     headers={"Authorization": f"Bearer {self.api_key}"},
-        #     json=payload,
-        #     timeout=300,  # 5 minute timeout
-        # )
-        # response.raise_for_status()
-        # return response.json()["output_url"]
+        # Add style preset
+        if style_preset:
+            enhancements.append(style_preset)
+        
+        # Add quality modifiers
+        quality_modifiers = [
+            "cinematic quality",
+            "professional lighting",
+            "smooth camera movement",
+        ]
+        enhancements.extend(quality_modifiers)
+        
+        # Combine
+        enhanced = prompt
+        if enhancements:
+            enhanced = f"{prompt}\n\nStyle: {', '.join(enhancements)}"
+        
+        # Truncate if too long
+        if len(enhanced) > 1500:
+            enhanced = enhanced[:1497] + "..."
+        
+        return enhanced
 
-        # Placeholder for development
-        logger.warning("Using placeholder video - implement actual API call")
-        return "https://example.com/placeholder-video.mp4"
-
-    def _download_video(self, url: str) -> Path:
-        """Download video from URL to local temp file."""
-        temp_dir = Path(tempfile.mkdtemp())
-        video_path = temp_dir / "video.mp4"
-
-        # In production, download from URL
-        # with httpx.stream("GET", url) as response:
-        #     with open(video_path, "wb") as f:
-        #         for chunk in response.iter_bytes():
-        #             f.write(chunk)
-
-        # Placeholder - create empty file
-        video_path.touch()
-
-        return video_path
-
-    def _generate_thumbnail(self, video_path: Path) -> Path:
-        """Generate thumbnail from video."""
-        thumbnail_path = video_path.parent / "thumbnail.jpg"
-
-        # In production, use ffmpeg
-        # ffmpeg.input(str(video_path), ss=1).output(
-        #     str(thumbnail_path),
-        #     vframes=1,
-        #     vf='scale=480:-1',
-        # ).run(quiet=True)
-
-        # Placeholder
-        thumbnail_path.touch()
-
-        return thumbnail_path
+    def _generate_thumbnail(self, video_path: Path) -> Path | None:
+        """Generate thumbnail from first frame using ffmpeg."""
+        try:
+            thumbnail_path = video_path.with_suffix(".jpg")
+            
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-vframes", "1",
+                    "-q:v", "2",
+                    str(thumbnail_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode == 0 and thumbnail_path.exists():
+                return thumbnail_path
+            
+            logger.warning("Failed to generate thumbnail", error=result.stderr)
+            return None
+        except Exception as e:
+            logger.warning("Thumbnail generation failed", error=str(e))
+            return None
 
     def _get_video_duration(self, video_path: Path) -> float:
-        """Get video duration in seconds."""
-        # In production, use ffprobe
-        # probe = ffmpeg.probe(str(video_path))
-        # return float(probe["format"]["duration"])
+        """Get video duration using ffprobe."""
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(video_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode == 0:
+                return float(result.stdout.strip())
+            
+            return 8.0  # Default duration
+        except Exception:
+            return 8.0
 
-        # Placeholder
-        return 10.0  # 10 seconds
+
+def generate_video(
+    prompt: str,
+    scene_bible: dict[str, Any] | None = None,
+    aspect_ratio: str = "16:9",
+    duration_seconds: int = 8,
+) -> VideoResult:
+    """Convenience function to generate video."""
+    generator = VideoGenerator()
+    return generator.generate(
+        video_prompt=prompt,
+        scene_bible=scene_bible,
+        aspect_ratio=aspect_ratio,
+        duration_seconds=duration_seconds,
+    )
