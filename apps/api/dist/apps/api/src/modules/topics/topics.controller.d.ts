@@ -4,23 +4,16 @@ export declare class TopicsController {
     constructor(topicsService: TopicsService);
     list(category?: string): Promise<{}>;
     getCategories(): Promise<{
-        items: {
-            name: string;
-            topicCount: number;
-        }[];
+        items: any;
     }>;
     getById(id: string): Promise<{
-        id: string;
-        title: string;
-        description: string | null;
-        category: string;
-        upvotes: number;
-        sceneCount: number;
-        createdBy: {
-            username: string;
-            id: string;
-            avatarUrl: string | null;
-        };
-        createdAt: Date;
+        id: any;
+        title: any;
+        description: any;
+        category: any;
+        upvotes: any;
+        sceneCount: any;
+        createdBy: any;
+        createdAt: any;
     }>;
 }

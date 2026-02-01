@@ -6,23 +6,16 @@ export declare class TopicsService {
     constructor(prisma: PrismaService, redis: RedisService);
     list(category?: string): Promise<{}>;
     findById(id: string): Promise<{
-        id: string;
-        title: string;
-        description: string | null;
-        category: string;
-        upvotes: number;
-        sceneCount: number;
-        createdBy: {
-            username: string;
-            id: string;
-            avatarUrl: string | null;
-        };
-        createdAt: Date;
+        id: any;
+        title: any;
+        description: any;
+        category: any;
+        upvotes: any;
+        sceneCount: any;
+        createdBy: any;
+        createdAt: any;
     }>;
     getCategories(): Promise<{
-        items: {
-            name: string;
-            topicCount: number;
-        }[];
+        items: any;
     }>;
 }

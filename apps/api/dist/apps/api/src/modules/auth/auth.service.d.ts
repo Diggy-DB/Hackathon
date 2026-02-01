@@ -14,7 +14,7 @@ export declare class AuthService {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     login(dto: LoginDto): Promise<{
@@ -24,7 +24,7 @@ export declare class AuthService {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     refreshToken(refreshToken: string): Promise<{
@@ -34,21 +34,13 @@ export declare class AuthService {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     logout(userId: string): Promise<{
         success: boolean;
     }>;
-    getUser(userId: string): Promise<{
-        email: string;
-        username: string;
-        id: string;
-        displayName: string | null;
-        avatarUrl: string | null;
-        role: import("@prisma/client").$Enums.UserRole;
-        createdAt: Date;
-    }>;
+    getUser(userId: string): Promise<any>;
     private generateTokens;
     private hashPassword;
     private verifyPassword;

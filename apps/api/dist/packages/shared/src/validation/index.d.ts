@@ -89,8 +89,8 @@ export declare const paginationSchema: z.ZodObject<{
     limit: number;
     cursor?: string | undefined;
 }, {
-    cursor?: string | undefined;
     page?: number | undefined;
     limit?: number | undefined;
+    cursor?: string | undefined;
 }>;
 export type PaginationInput = z.infer<typeof paginationSchema>;

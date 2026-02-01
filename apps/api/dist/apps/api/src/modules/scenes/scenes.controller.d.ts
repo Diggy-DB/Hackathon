@@ -7,138 +7,28 @@ export declare class ScenesController {
     private readonly sceneBibleService;
     constructor(scenesService: ScenesService, sceneBibleService: SceneBibleService);
     listScenes(query: ListScenesQueryDto): Promise<{
-        items: ({
-            topic: {
-                title: string;
-                id: string;
-            } | null;
-            createdBy: {
-                username: string;
-                id: string;
-                avatarUrl: string | null;
-            };
-        } & {
-            description: string | null;
-            title: string;
-            id: string;
-            status: import("@prisma/client").$Enums.SceneStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            topicId: string | null;
-            upvotes: number;
-            createdById: string;
-            viewCount: number;
-            thumbnailUrl: string | null;
-            segmentCount: number;
-            totalDuration: number;
-            publishedAt: Date | null;
-        })[];
+        items: any;
         meta: {
             page: number;
             limit: number;
-            total: number;
+            total: any;
             hasMore: boolean;
         };
     }>;
-    getScene(id: string): Promise<{}>;
+    getScene(id: string): Promise<any>;
     getPlaylist(id: string): Promise<{
-        sceneId: string;
-        totalDuration: number;
-        segments: {
-            id: string;
-            thumbnailUrl: string | null;
-            orderIndex: number;
-            hlsUrl: string | null;
-            duration: number | null;
-        }[];
+        sceneId: any;
+        totalDuration: any;
+        segments: any;
     }>;
     getBible(id: string): Promise<import("./scene-bible.service").SceneBibleData>;
     createScene(dto: CreateSceneDto, user: JwtPayload): Promise<{
-        scene: {
-            description: string | null;
-            title: string;
-            id: string;
-            status: import("@prisma/client").$Enums.SceneStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            topicId: string | null;
-            upvotes: number;
-            createdById: string;
-            viewCount: number;
-            thumbnailUrl: string | null;
-            segmentCount: number;
-            totalDuration: number;
-            publishedAt: Date | null;
-        };
-        segment: {
-            id: string;
-            status: import("@prisma/client").$Enums.SegmentStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            prompt: string;
-            createdById: string;
-            thumbnailUrl: string | null;
-            orderIndex: number;
-            sceneId: string;
-            expandedScript: string | null;
-            videoUrl: string | null;
-            hlsUrl: string | null;
-            duration: number | null;
-            continuityHash: string | null;
-            completedAt: Date | null;
-        };
-        job: {
-            error: string | null;
-            type: import("@prisma/client").$Enums.JobType;
-            id: string;
-            status: import("@prisma/client").$Enums.JobStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            result: import("@prisma/client/runtime/library").JsonValue | null;
-            completedAt: Date | null;
-            priority: number;
-            progress: number;
-            stage: string | null;
-            attempts: number;
-            maxAttempts: number;
-            startedAt: Date | null;
-            segmentId: string | null;
-        };
+        scene: any;
+        segment: any;
+        job: any;
     }>;
     continueScene(id: string, dto: ContinueSceneDto, user: JwtPayload): Promise<{
-        segment: {
-            id: string;
-            status: import("@prisma/client").$Enums.SegmentStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            prompt: string;
-            createdById: string;
-            thumbnailUrl: string | null;
-            orderIndex: number;
-            sceneId: string;
-            expandedScript: string | null;
-            videoUrl: string | null;
-            hlsUrl: string | null;
-            duration: number | null;
-            continuityHash: string | null;
-            completedAt: Date | null;
-        };
-        job: {
-            error: string | null;
-            type: import("@prisma/client").$Enums.JobType;
-            id: string;
-            status: import("@prisma/client").$Enums.JobStatus;
-            createdAt: Date;
-            updatedAt: Date;
-            result: import("@prisma/client/runtime/library").JsonValue | null;
-            completedAt: Date | null;
-            priority: number;
-            progress: number;
-            stage: string | null;
-            attempts: number;
-            maxAttempts: number;
-            startedAt: Date | null;
-            segmentId: string | null;
-        };
+        segment: any;
+        job: any;
     }>;
 }

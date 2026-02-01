@@ -11,7 +11,7 @@ export declare class AuthController {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     login(dto: LoginDto): Promise<{
@@ -21,7 +21,7 @@ export declare class AuthController {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     refresh(dto: RefreshTokenDto): Promise<{
@@ -31,19 +31,11 @@ export declare class AuthController {
         user: {
             id: string;
             email: string;
-            role: import("@prisma/client").$Enums.UserRole;
+            role: UserRole;
         };
     }>;
     logout(user: JwtPayload): Promise<{
         success: boolean;
     }>;
-    getMe(user: JwtPayload): Promise<{
-        email: string;
-        username: string;
-        id: string;
-        displayName: string | null;
-        avatarUrl: string | null;
-        role: import("@prisma/client").$Enums.UserRole;
-        createdAt: Date;
-    }>;
+    getMe(user: JwtPayload): Promise<any>;
 }
